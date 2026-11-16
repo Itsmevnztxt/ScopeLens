@@ -1,0 +1,90 @@
+# ScopeLens — Docker Compose Self-Hosted Stack (VPS Migration Stage)
+# Menggabungkan PostgreSQL 15 (dengan migrasi otomatis), PostgREST, GoTrue Auth,
+# serta Caddy reverse proxy HTTPS + static serving frontend.
+
+services:
+  db:
+    image: supabase/postgres:15.1.1.78
+    container_name: scopelens-db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:54322:5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD wajib diisi}
+      POSTGRES_DB: postgres
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET minimal 32 karakter}
+      JWT_EXP: 3600
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../supabase/migrations/202611160001_initial_schema.sql:/docker-entrypoint-initdb.d/zz_01_initial_schema.sql:ro
+      - ../supabase/migrations/202611160002_rls_policies.sql:/docker-entrypoint-initdb.d/zz_02_rls_policies.sql:ro
+      - ../supabase/migrations/202611160003_rpc_transactions.sql:/docker-entrypoint-initdb.d/zz_03_rpc_transactions.sql:ro
+      - ../supabase/migrations/202611160004_roles_and_realtime.sql:/docker-entrypoint-initdb.d/zz_04_roles_and_realtime.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth:
+    image: supabase/gotrue:v2.158.1
+    container_name: scopelens-auth
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${PUBLIC_URL}
+      GOTRUE_SITE_URL: ${PUBLIC_URL}
+      GOTRUE_URI_ALLOW_LIST: ${PUBLIC_URL}/*
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/postgres
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-noreply@example.com}
+
+  rest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: scopelens-rest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: scopelens-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../dist:/srv/scopelens:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - auth
+      - rest
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

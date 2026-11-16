@@ -1,0 +1,28 @@
+{$DOMAIN} {
+  encode zstd gzip
+
+  # Reverse proxy GoTrue Auth API (sesuai endpoint Supabase JS Client)
+  handle /auth/v1/* {
+    uri strip_prefix /auth/v1
+    reverse_proxy auth:9999
+  }
+
+  # Reverse proxy PostgREST API
+  handle /rest/v1/* {
+    uri strip_prefix /rest/v1
+    reverse_proxy rest:3000
+  }
+
+  # Serve Static React SPA build (/srv/scopelens)
+  handle {
+    root * /srv/scopelens
+    try_files {path} /index.html
+    file_server
+  }
+
+  header {
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy strict-origin-when-cross-origin
+  }
+}
